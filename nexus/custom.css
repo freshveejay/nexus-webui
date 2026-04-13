@@ -1,0 +1,108 @@
+/* AIMSHO — AI Media Systems Holdings
+   Minimalist shadcn/ui-inspired theme */
+
+/* Typography */
+:root {
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+body, input, textarea, select, button {
+  font-family: var(--font-sans) !important;
+  letter-spacing: -0.01em;
+}
+
+/* Light Mode */
+:root, .light {
+  --color-bg-primary: #fafafa;
+  --color-bg-secondary: #ffffff;
+  --color-bg-muted: #f4f4f5;
+  --color-border: #e4e4e7;
+  --color-text-primary: #09090b;
+  --color-text-secondary: #71717a;
+  --color-accent: #18181b;
+  --color-accent-hover: #27272a;
+  --color-ring: #a1a1aa;
+}
+
+/* Dark Mode */
+.dark {
+  --color-bg-primary: #09090b;
+  --color-bg-secondary: #0a0a0a;
+  --color-bg-muted: #18181b;
+  --color-border: #27272a;
+  --color-text-primary: #fafafa;
+  --color-text-secondary: #a1a1aa;
+  --color-accent: #fafafa;
+  --color-accent-hover: #e4e4e7;
+  --color-ring: #3f3f46;
+}
+
+/* Sidebar */
+#sidebar {
+  background: var(--color-bg-secondary) !important;
+  border-right: 1px solid var(--color-border) !important;
+}
+
+/* Hide Open WebUI branding in sidebar header */
+#sidebar-header span,
+#sidebar .font-semibold,
+a[href="https://openwebui.com"] {
+  display: none !important;
+}
+
+/* Message Bubbles */
+.assistant-message { background: transparent !important; }
+.user-message {
+  background: var(--color-bg-muted) !important;
+  border-radius: 12px !important;
+  border: 1px solid var(--color-border) !important;
+}
+
+/* Input Area */
+.chat-input, textarea {
+  background: var(--color-bg-secondary) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: 12px !important;
+  transition: border-color 0.15s ease;
+}
+.chat-input:focus-within, textarea:focus {
+  border-color: var(--color-ring) !important;
+  outline: none !important;
+  box-shadow: 0 0 0 2px rgba(161, 161, 170, 0.15) !important;
+}
+
+/* Buttons */
+button.primary, button[type="submit"] {
+  background: var(--color-accent) !important;
+  color: var(--color-bg-primary) !important;
+  border-radius: 8px !important;
+  border: none !important;
+  font-weight: 500 !important;
+  transition: background 0.15s ease;
+}
+button.primary:hover, button[type="submit"]:hover {
+  background: var(--color-accent-hover) !important;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-ring); }
+
+/* Remove visual noise */
+.shadow-lg, .shadow-xl, .shadow-2xl { box-shadow: none !important; }
+
+/* Code blocks */
+pre, code { border-radius: 8px !important; font-size: 0.875rem !important; }
+.dark pre { background: #111113 !important; border: 1px solid var(--color-border) !important; }
+.light pre { background: #f4f4f5 !important; border: 1px solid var(--color-border) !important; }
+
+/* Model selector */
+select, .model-selector {
+  border-radius: 8px !important;
+  border: 1px solid var(--color-border) !important;
+  background: var(--color-bg-secondary) !important;
+}
+
+/* Clean transitions */
+* { transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }

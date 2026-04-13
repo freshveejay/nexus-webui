@@ -1,0 +1,67 @@
+# NEXUS Platform - Open WebUI Fork
+# Configured for Hollywood post-production with 5 AI personas
+# Connects to DGX Spark Nemotron Super + Kokoro TTS
+#
+# Usage: docker compose -f docker-compose.nexus.yaml up -d
+
+services:
+  nexus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        USE_CUDA: "false"
+        USE_SLIM: "true"
+    container_name: nexus-webui
+    volumes:
+      - nexus-data:/app/backend/data
+      - ./nexus/seed.py:/app/nexus/seed.py:ro
+      - ./nexus/custom.css:/app/backend/open_webui/static/custom.css:ro
+    ports:
+      - "${NEXUS_PORT:-3080}:8080"
+    environment:
+      # ─── Core ───
+      - WEBUI_NAME=NEXUS
+      - WEBUI_AUTH=true
+      - ENABLE_SIGNUP=true
+      - DEFAULT_USER_ROLE=pending
+
+      # ─── LLM Backend (Nemotron Super on DGX Spark 2079) ───
+      - OPENAI_API_BASE_URL=http://192.168.1.113:8000/v1
+      - OPENAI_API_KEY=not-needed
+      - ENABLE_OLLAMA_API=false
+
+      # ─── TTS (Kokoro on Mac Studio) ───
+      - AUDIO_TTS_ENGINE=openai
+      - AUDIO_TTS_OPENAI_API_BASE_URL=http://192.168.1.145:5010/v1
+      - AUDIO_TTS_OPENAI_API_KEY=not-needed
+      - AUDIO_TTS_MODEL=kokoro
+      - AUDIO_TTS_VOICE=af_heart
+
+      # ─── RAG / Embeddings ───
+      - RAG_EMBEDDING_ENGINE=openai
+      - RAG_OPENAI_API_BASE_URL=http://192.168.1.109:8006/v1
+      - RAG_OPENAI_API_KEY=not-needed
+      - RAG_EMBEDDING_MODEL=nvidia/llama-3.2-nv-embedqa-1b-v2
+
+      # ─── Auth (Google OAuth) ───
+      - ENABLE_OAUTH_SIGNUP=true
+      - OAUTH_PROVIDER_NAME=Google
+      - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:-}
+      - GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      - GOOGLE_OAUTH_SCOPE=openid email profile
+
+      # ─── Security ───
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:-}
+      - CORS_ALLOW_ORIGIN=*
+
+      # ─── Telemetry Off ───
+      - SCARF_NO_ANALYTICS=true
+      - DO_NOT_TRACK=true
+      - ANONYMIZED_TELEMETRY=false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  nexus-data: {}
