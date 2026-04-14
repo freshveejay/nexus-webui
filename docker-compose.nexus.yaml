@@ -18,7 +18,7 @@ services:
       - ./nexus/seed.py:/app/nexus/seed.py:ro
       - ./nexus/custom.css:/app/backend/open_webui/static/custom.css:ro
     ports:
-      - "${NEXUS_PORT:-3080}:8080"
+      - "${NEXUS_PORT:-3090}:8080"
     environment:
       # ─── Core ───
       - WEBUI_NAME=NEXUS

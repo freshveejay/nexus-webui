@@ -262,16 +262,16 @@ def seed_groups(db: sqlite3.Connection, admin_id: str):
         for model_id in model_ids:
             cursor = db.execute(
                 "SELECT id FROM access_grant WHERE resource_type = 'model' AND resource_id = ? "
-                "AND grant_type = 'group' AND grant_id = ?",
+                "AND principal_type = 'group' AND principal_id = ?",
                 (model_id, group_id),
             )
             if cursor.fetchone():
                 continue
             grant_id = str(uuid.uuid4())
             db.execute(
-                "INSERT INTO access_grant (id, resource_type, resource_id, grant_type, grant_id, permission, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (grant_id, "model", model_id, "group", group_id, "read", now, now),
+                "INSERT INTO access_grant (id, resource_type, resource_id, principal_type, principal_id, permission, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (grant_id, "model", model_id, "group", group_id, "read", now),
             )
             print(f"    Granted '{group_name}' access to model '{model_id}'")
     db.commit()
@@ -302,10 +302,15 @@ def seed_config(db: sqlite3.Connection):
     # Merge with existing config
     config.update(updates)
 
+    from datetime import datetime
+    now_dt = datetime.utcnow().isoformat()
     if db.execute("SELECT COUNT(*) FROM config").fetchone()[0] > 0:
-        db.execute("UPDATE config SET data = ? WHERE rowid = 1", (json.dumps(config),))
+        db.execute("UPDATE config SET data = ?, updated_at = ? WHERE rowid = 1", (json.dumps(config), now_dt))
     else:
-        db.execute("INSERT INTO config (data) VALUES (?)", (json.dumps(config),))
+        db.execute(
+            "INSERT INTO config (data, version, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (json.dumps(config), 0, now_dt, now_dt),
+        )
     db.commit()
     print("  Default model set to nexus-base")
     print("  UI name set to NEXUS")
