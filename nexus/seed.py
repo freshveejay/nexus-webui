@@ -1,19 +1,33 @@
 """
 NEXUS Seed Script for Open WebUI
 Pre-configures the database with NEXUS personas, user groups, and connections.
-Run after first startup: python -m nexus.seed
+
+Idempotent: re-running never duplicates rows (every insert checks first).
+DRY-RUN by default: prints the exact plan WITHOUT touching the database.
+Pass --apply to actually write.
+
+Usage:
+    python -m nexus.seed            # dry-run, shows planned changes only
+    python -m nexus.seed --apply    # writes to the database
+
+Run after first startup:
+    docker exec aimsho-webui python /app/nexus/seed.py            # dry-run
+    docker exec aimsho-webui python /app/nexus/seed.py --apply    # apply
 """
 
+import argparse
 import json
 import os
 import sqlite3
 import time
 import uuid
-from pathlib import Path
 
 # Default DB path matches Open WebUI's default
 DB_PATH = os.getenv("NEXUS_DB_PATH", "/app/backend/data/webui.db")
-ADMIN_USER_ID = None  # Will be detected from existing admin
+
+# Set by main() from CLI flag. When False (default) the script is a no-op
+# against the DB: it reports what WOULD change but commits nothing.
+APPLY = False
 
 
 # ─── NEXUS Personalities as Model Configs ────────────────────────────────────
@@ -169,18 +183,44 @@ NEXUS_GROUPS = [
             "chat": {"temporary": True, "file_upload": True, "edit": True, "delete": True},
         },
     },
+    {
+        "name": "Admin",
+        "description": "Full access. All 5 NEXUS personas, all knowledge bases, all tools.",
+        "permissions": {
+            "workspace": {"models": True, "knowledge": True, "prompts": True, "tools": True},
+            "chat": {"temporary": True, "file_upload": True, "edit": True, "delete": True},
+        },
+    },
 ]
 
-# Which models each group can access
+# Which models each group can access (matches NEXUS.md catalog).
 GROUP_MODEL_ACCESS = {
     "Creative": ["nexus-base", "nexus-muse"],
     "Analyst": ["nexus-base", "nexus-quant"],
     "Operator": ["nexus-base", "nexus-dispatch"],
     "Manager": ["nexus-base", "nexus-quant", "nexus-dispatch"],
+    "Admin": ["nexus-base", "nexus-counsel", "nexus-muse", "nexus-quant", "nexus-dispatch"],
+}
+
+# Which knowledge bases (Milvus-backed KB collections) each group can read.
+# KB grants are created only for collections that already exist in the
+# `knowledge` table; missing collections are reported and skipped (never
+# fabricated) so this stays safe against the live DB.
+GROUP_KB_ACCESS = {
+    "Creative": [],
+    "Analyst": ["nate_b_jones_transcripts"],
+    "Operator": [],
+    "Manager": ["nate_b_jones_transcripts"],
+    "Admin": ["nate_b_jones_transcripts"],
 }
 
 
 # ─── Seed Functions ──────────────────────────────────────────────────────────
+
+def _tag() -> str:
+    """Verb prefix that makes dry-run vs apply obvious in the log."""
+    return "Would create" if not APPLY else "Created"
+
 
 def get_admin_user_id(db: sqlite3.Connection) -> str:
     """Find the first admin user ID."""
@@ -193,12 +233,16 @@ def get_admin_user_id(db: sqlite3.Connection) -> str:
 
 
 def seed_models(db: sqlite3.Connection, admin_id: str):
-    """Insert NEXUS model configs if they don't exist."""
+    """Insert NEXUS model configs if they don't exist. Idempotent."""
     now = int(time.time())
     for model in NEXUS_MODELS:
         cursor = db.execute("SELECT id FROM model WHERE id = ?", (model["id"],))
         if cursor.fetchone():
             print(f"  Model '{model['name']}' already exists, skipping")
+            continue
+
+        print(f"  {_tag()} model: {model['name']} (base: {model['base_model_id']})")
+        if not APPLY:
             continue
 
         db.execute(
@@ -216,12 +260,44 @@ def seed_models(db: sqlite3.Connection, admin_id: str):
                 now,
             ),
         )
-        print(f"  Created model: {model['name']} (base: {model['base_model_id']})")
-    db.commit()
+    if APPLY:
+        db.commit()
+
+
+def _existing_kb_ids(db: sqlite3.Connection) -> dict:
+    """Map known KB names -> knowledge.id for KBs that already exist.
+
+    Returns {} if the `knowledge` table is absent (older schema). We never
+    create KB rows here; only grant access to ones that already exist.
+    """
+    try:
+        rows = db.execute("SELECT id, name FROM knowledge").fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {name: kid for (kid, name) in rows}
+
+
+def _grant_access(db, group_name, group_id, resource_type, resource_id, now):
+    """Idempotently grant a group read access to a resource. Honors DRY-RUN."""
+    cursor = db.execute(
+        "SELECT id FROM access_grant WHERE resource_type = ? AND resource_id = ? "
+        "AND principal_type = 'group' AND principal_id = ?",
+        (resource_type, resource_id, group_id),
+    )
+    if cursor.fetchone():
+        return
+    print(f"    {_tag()} grant: '{group_name}' -> {resource_type} '{resource_id}'")
+    if not APPLY:
+        return
+    db.execute(
+        "INSERT INTO access_grant (id, resource_type, resource_id, principal_type, principal_id, permission, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), resource_type, resource_id, "group", group_id, "read", now),
+    )
 
 
 def seed_groups(db: sqlite3.Connection, admin_id: str):
-    """Insert NEXUS user groups if they don't exist."""
+    """Insert NEXUS user groups + model/KB access if missing. Idempotent."""
     now = int(time.time())
     group_ids = {}
 
@@ -236,45 +312,49 @@ def seed_groups(db: sqlite3.Connection, admin_id: str):
         group_id = str(uuid.uuid4())
         group_ids[group["name"]] = group_id
 
-        db.execute(
-            "INSERT INTO 'group' (id, user_id, name, description, data, meta, permissions, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                group_id,
-                admin_id,
-                group["name"],
-                group["description"],
-                json.dumps({}),
-                json.dumps({}),
-                json.dumps(group["permissions"]),
-                now,
-                now,
-            ),
-        )
-        print(f"  Created group: {group['name']}")
-    db.commit()
+        print(f"  {_tag()} group: {group['name']}")
+        if APPLY:
+            db.execute(
+                "INSERT INTO 'group' (id, user_id, name, description, data, meta, permissions, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    group_id,
+                    admin_id,
+                    group["name"],
+                    group["description"],
+                    json.dumps({}),
+                    json.dumps({}),
+                    json.dumps(group["permissions"]),
+                    now,
+                    now,
+                ),
+            )
+    if APPLY:
+        db.commit()
 
-    # Set model access per group via access_grant table
+    # Set model access per group via access_grant table.
     for group_name, model_ids in GROUP_MODEL_ACCESS.items():
         group_id = group_ids.get(group_name)
         if not group_id:
             continue
         for model_id in model_ids:
-            cursor = db.execute(
-                "SELECT id FROM access_grant WHERE resource_type = 'model' AND resource_id = ? "
-                "AND principal_type = 'group' AND principal_id = ?",
-                (model_id, group_id),
-            )
-            if cursor.fetchone():
+            _grant_access(db, group_name, group_id, "model", model_id, now)
+
+    # Set knowledge-base access per group. Only grant KBs that already exist.
+    kb_ids = _existing_kb_ids(db)
+    for group_name, kb_names in GROUP_KB_ACCESS.items():
+        group_id = group_ids.get(group_name)
+        if not group_id:
+            continue
+        for kb_name in kb_names:
+            kb_id = kb_ids.get(kb_name)
+            if not kb_id:
+                print(f"    SKIP KB grant: '{group_name}' -> '{kb_name}' (KB not found in DB)")
                 continue
-            grant_id = str(uuid.uuid4())
-            db.execute(
-                "INSERT INTO access_grant (id, resource_type, resource_id, principal_type, principal_id, permission, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (grant_id, "model", model_id, "group", group_id, "read", now),
-            )
-            print(f"    Granted '{group_name}' access to model '{model_id}'")
-    db.commit()
+            _grant_access(db, group_name, group_id, "knowledge", kb_id, now)
+
+    if APPLY:
+        db.commit()
 
 
 def seed_config(db: sqlite3.Connection):
@@ -302,6 +382,10 @@ def seed_config(db: sqlite3.Connection):
     # Merge with existing config
     config.update(updates)
 
+    print(f"  {_tag()} config: default_models=nexus-base, WEBUI_NAME=NEXUS")
+    if not APPLY:
+        return
+
     from datetime import datetime
     now_dt = datetime.utcnow().isoformat()
     if db.execute("SELECT COUNT(*) FROM config").fetchone()[0] > 0:
@@ -317,8 +401,19 @@ def seed_config(db: sqlite3.Connection):
 
 
 def main():
+    global APPLY
+    parser = argparse.ArgumentParser(description="NEXUS seed for Open WebUI (idempotent).")
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write changes to the database. Without this flag the script is a DRY-RUN.",
+    )
+    args = parser.parse_args()
+    APPLY = args.apply
+
     print("\n" + "=" * 60)
     print("NEXUS Seed Script for Open WebUI")
+    print("  MODE: " + ("APPLY (writing to DB)" if APPLY else "DRY-RUN (no writes) — pass --apply to commit"))
     print("=" * 60)
 
     # Find the database
@@ -341,7 +436,12 @@ def main():
 
     print(f"\n  Database: {db_path}")
 
-    db = sqlite3.connect(db_path)
+    # In DRY-RUN, open the DB read-only (immutable) so the script physically
+    # cannot write — a hard safety net on top of the APPLY guards.
+    if APPLY:
+        db = sqlite3.connect(db_path)
+    else:
+        db = sqlite3.connect(f"file:{os.path.abspath(db_path)}?mode=ro", uri=True)
 
     # Check tables exist
     tables = [row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
@@ -365,8 +465,12 @@ def main():
     db.close()
 
     print("\n" + "=" * 60)
-    print("  NEXUS seed complete!")
-    print("  Restart Open WebUI to apply changes.")
+    if APPLY:
+        print("  NEXUS seed complete!")
+        print("  Restart Open WebUI to apply changes.")
+    else:
+        print("  DRY-RUN complete — nothing was written.")
+        print("  Re-run with --apply to commit the changes above.")
     print("=" * 60 + "\n")
 
 
